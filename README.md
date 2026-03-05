@@ -1,4 +1,12 @@
-# OpenClaw Todo Bot — Pi 5 Setup
+# OpenClaw Bot 
+
+
+
+![image-20260304172817666](./Images/image-20260304172817666.png)
+
+
+
+
 
 ## What OpenClaw Actually Is (the mental model)
 
