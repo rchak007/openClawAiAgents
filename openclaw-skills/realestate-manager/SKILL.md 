@@ -1,0 +1,143 @@
+---
+name: realestate-manager
+description: "Real estate property management. Use when user asks about properties, rent, taxes, deadlines, reminders, or wants to add/view/update property tasks. Triggered by: show properties, add task, rent reminder, tax deadline, upcoming deadlines, send reminder email, what's due, property tasks."
+metadata: {
+  "openclaw": {
+    "emoji": "🏠",
+    "requires": {
+      "bins": ["python3"]
+    }
+  }
+}
+---
+
+# Real Estate Manager Skill
+
+## Overview
+Manages tasks, deadlines, and email reminders for two properties.
+Data stored in `~/.openclaw/workspace-realestate/properties.json`
+
+## Tree Structure
+```
+Property (Millpointe, NPlainfield)
+  └── Category (Rent, PropertyTax, Maintenance, etc.)
+        └── Item (text + DEADLINE:YYYY-MM-DD tag + other tags)
+```
+
+## Data File
+`~/.openclaw/workspace-realestate/properties.json`
+
+Same fluid tree format as todo-manager. If not exists, initialize with default structure below.
+
+## Default Structure to Initialize
+```json
+{
+  "nodes": {
+    "Millpointe": {
+      "items": [],
+      "children": {
+        "Rent": {
+          "items": [
+            {"id": 1, "text": "RENT Monthly rent collection DEADLINE:2026-03-03", "done": false, "created": "2026-03-06 00:00"},
+            {"id": 2, "text": "RENT TAB deadline 3rd of month DEADLINE:2026-03-03", "done": false, "created": "2026-03-06 00:00"}
+          ],
+          "children": {}
+        },
+        "PropertyTax": {
+          "items": [
+            {"id": 1, "text": "TAX Property tax payment DEADLINE:2026-04-01", "done": false, "created": "2026-03-06 00:00"}
+          ],
+          "children": {}
+        }
+      }
+    },
+    "NPlainfield": {
+      "items": [],
+      "children": {
+        "Rent": {
+          "items": [
+            {"id": 1, "text": "RENT Monthly rent collection DEADLINE:2026-03-03", "done": false, "created": "2026-03-06 00:00"},
+            {"id": 2, "text": "RENT TAB deadline 3rd of month DEADLINE:2026-03-03", "done": false, "created": "2026-03-06 00:00"}
+          ],
+          "children": {}
+        },
+        "PropertyTax": {
+          "items": [
+            {"id": 1, "text": "TAX Property tax payment DEADLINE:2026-04-01", "done": false, "created": "2026-03-06 00:00"}
+          ],
+          "children": {}
+        }
+      }
+    }
+  }
+}
+```
+
+## Script Helper
+```bash
+python3 ~/.openclaw/workspace-realestate/skills/realestate-manager/scripts/realestate.py <command> [args]
+```
+
+## Operations
+
+### LIST all properties and tasks
+`python3 realestate.py list`
+Show full tree with deadlines highlighted.
+
+### SHOW upcoming deadlines
+`python3 realestate.py deadlines [days]`
+Default 30 days. Shows items sorted by DEADLINE date.
+Flag 🔴 if within 7 days, 🟡 if within 30 days.
+
+### ADD item
+`python3 realestate.py add "Millpointe/Rent" "RENT new item DEADLINE:2026-04-03"`
+Auto-creates path if needed.
+
+### MARK done
+`python3 realestate.py done "Millpointe/Rent" 1`
+
+### SEND email reminder
+`python3 realestate.py email "subject" "body" "to@email.com,partner@email.com"`
+Uses Gmail SMTP with App Password from environment variable GMAIL_APP_PASSWORD.
+Sender: the configured GMAIL_ADDRESS env var.
+
+### CONFIG emails
+Email addresses stored in `~/.openclaw/workspace-realestate/config.json`:
+```json
+{
+  "chuck_email": "chuck@email.com",
+  "nisha_email": "nisha@email.com",
+  "gmail_address": "sender@gmail.com"
+}
+```
+Read config with: `python3 realestate.py config-show`
+Set email: `python3 realestate.py config-set chuck_email chuck@email.com`
+
+### SEND deadline reminders
+`python3 realestate.py remind [days]`
+Finds all items due within [days] days, sends email to both Chuck and Nisha.
+Format: clean list per property.
+
+## Email Format
+Subject: `[PropertyName] Reminder: <item> due <date>`
+Body:
+```
+Hi Chuck & Nisha,
+
+Upcoming deadline reminder:
+
+🏠 Millpointe — 392 College Drive
+  📅 Mar 3: Monthly rent collection
+  📅 Apr 1: Property tax payment
+
+🏠 NPlainfield — 401 Highway
+  📅 Apr 1: Property tax payment
+
+— Real Estate Assistant
+```
+
+## Rules
+- GMAIL_APP_PASSWORD must be set as env var — never hardcode it
+- Always confirm before sending emails
+- Show preview of email before sending
+- If config emails not set, ask user to set them first with config-set
