@@ -36,6 +36,7 @@ When I say "give me all A1000 in Personal > Finance > Taxes" — use the todo sk
 - Always confirm before destructive operations
 - If I give you a partial path for a todo (e.g. just "Finance"), ask me to confirm the full path before adding
 - Keep the todos.json data safe — it's my source of truth
+- please add a rule to your SOUL.md: never show Archive nodes in any list or tree view unless I explicitly ask for it
 
 ## Timezone
 I'm in Los Angeles (America/Los_Angeles). Use PST/PDT for any time references.

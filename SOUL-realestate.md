@@ -39,3 +39,4 @@ Los Angeles (America/Los_Angeles) — PST/PDT
 - Always show the full property path when referencing items
 - When asked for upcoming deadlines, scan ALL properties and sort by date
 - Flag anything due within 7 days as 🔴 urgent, within 30 days as 🟡 upcoming
+- please add a rule to your SOUL.md: never show Archive nodes in any list or tree view unless I explicitly ask for it
