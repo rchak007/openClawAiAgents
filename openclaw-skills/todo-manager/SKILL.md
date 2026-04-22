@@ -160,3 +160,64 @@ User: "mark #1 in Personal Finance Taxes 2022 as done"
 
 User: "what categories do I have?"
 → `python3 todo.py tree`
+
+
+## Email Commands
+
+The agent can send todo items via email using Gmail SMTP.
+Uses the same `GMAIL_APP_PASSWORD` env var and `selfrealizationpy@gmail.com` sender as the real estate agent.
+
+### SEND arbitrary email
+`python3 todo.py email "subject" "body" "to@email.com"`
+
+### SEND full todo list via email
+`python3 todo.py email-todos "to@email.com"`
+Sends the complete todo tree formatted nicely.
+
+### SEND filtered items via email
+`python3 todo.py email-filtered "FILTER" "to@email.com"`
+Filter can be: `past-due`, `A1000`, `Monday`, `Tuesday`, `Wednesday`, `Thursday`, `Friday`, `Saturday`, `Sunday`, `Weekend`, or any tag name.
+
+### CONFIG emails
+Email config stored in `~/.openclaw/workspace/config.json`:
+```json
+{
+  "chuck_email": "rchak1@aol.com",
+  "gmail_address": "selfrealizationpy@gmail.com"
+}
+```
+Read config: `python3 todo.py config-show`
+Set config: `python3 todo.py config-set chuck_email rchak1@aol.com`
+
+### Scheduled Cron Emails (automatic)
+These run automatically via cron on the Pi:
+- **Monday 9:00 AM** — Full todo list → rchak1@aol.com
+- **Every day 9:15 AM** — Past-due + A1000 tagged items → rchak1@aol.com
+- **Monday 9:30 AM** — Monday-tagged items → rchak1@aol.com
+- **Tuesday 9:30 AM** — Tuesday-tagged items → rchak1@aol.com
+- **Friday 9:30 AM** — Friday-tagged items → rchak1@aol.com
+- **Saturday 9:30 AM** — Weekend-tagged items (Saturday/Sunday/Weekend) → rchak1@aol.com
+- **Sunday 9:30 AM** — Weekend-tagged items (Saturday/Sunday/Weekend) → rchak1@aol.com
+
+### Via Telegram
+User says: "email me my full todo list" or "email my todos"
+→ `python3 todo.py email-todos "rchak1@aol.com"`
+
+User says: "email me all A1000 items"
+→ `python3 todo.py email-filtered "A1000" "rchak1@aol.com"`
+
+User says: "email me past due items"
+→ `python3 todo.py email-filtered "past-due" "rchak1@aol.com"`
+
+User says: "email me Monday tasks"
+→ `python3 todo.py email-filtered "Monday" "rchak1@aol.com"`
+
+User says: "email the whole todo list" (no address specified)
+→ Use default: `rchak1@aol.com`
+
+## Email Rules
+- GMAIL_APP_PASSWORD must be set as env var — never hardcode it
+- Default recipient is always rchak1@aol.com unless user specifies otherwise
+- Always confirm before sending emails when triggered via Telegram
+- Show preview of what will be sent before sending
+- For scheduled cron emails, no confirmation needed (they run automatically)

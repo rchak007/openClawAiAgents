@@ -1,353 +1,493 @@
 #!/usr/bin/env python3
 """
-todo.py — Fluid unlimited-depth tree todo manager
-Used by OpenClaw's todo-manager skill.
-
-Data model:
-  {
-    "nodes": {
-      "Personal": {
-        "children": {
-          "Finance": {
-            "children": {
-              "Taxes": {
-                "children": {
-                  "2022": {
-                    "items": [{"id":1,"text":"A1000 file returns","done":false,"created":"..."}]
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
+todo.py — Personal todo tree manager for OpenClaw agent
 
 Commands:
-  add   "node1/node2/node3"  "item text"   — add item, auto-create path
-  list                                      — full tree with items
-  tree                                      — just node names (no items)
-  show  "node1/node2"                       — list subtree at path
-  find  "TAG"  ["node1/node2"]              — search by tag, optional path filter
-  done  "node1/node2"  <id>                 — mark item done
-  undone "node1/node2" <id>                 — unmark item
-  clear                                     — remove all done items
-  delete "node1/node2"                      — delete node (and all children/items)
-  move  "old/path"  "new/path"              — move a node
-  rename "node1/node2"  "new name"          — rename last node in path
-  dump                                      — pretty-print raw JSON
+  list                          — show full todo tree
+  tree                          — show node names only (no items)
+  show "path"                   — show items under a path
+  find "TAG" ["path"]           — find items by tag, optionally scoped
+  add "path" "text"             — add item (auto-creates nodes)
+  done "path" id                — mark item done
+  undone "path" id              — mark item not done
+  clear                         — remove all completed items
+  delete "path"                 — delete a node and all children
+  rename "path" "new name"      — rename a node
+  move "src" "dst"              — move a node to a new parent
+  dump                          — print raw JSON
+  email "subject" "body" "to"   — send email via Gmail SMTP
+  email-todos "to"              — email full todo list
+  email-filtered "filter" "to"  — email filtered items (past-due, A1000, Monday, etc.)
+  config-show                   — show email config
+  config-set key value          — set config value
 """
 
 import sys
 import json
 import re
-from datetime import datetime
+import smtplib
+import os
+from datetime import datetime, date, timedelta
 from pathlib import Path
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
-DATA = Path.home() / ".openclaw" / "workspace" / "todos.json"
-INDENT = "  "
+# ── Paths ─────────────────────────────────────────────────────────
+WORKSPACE = Path.home() / ".openclaw" / "workspace"
+DATA      = WORKSPACE / "todos.json"
+CONFIG    = WORKSPACE / "config.json"
 
 # ── Data helpers ──────────────────────────────────────────────────
-
-def load() -> dict:
+def load_data():
     if DATA.exists():
-        return json.loads(DATA.read_text(encoding="utf-8"))
-    d = {"nodes": {}}
-    _save(d)
-    return d
+        return json.loads(DATA.read_text())
+    return {"name": "root", "children": [], "items": []}
 
-def _save(d: dict):
+def save_data(tree):
     DATA.parent.mkdir(parents=True, exist_ok=True)
-    DATA.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+    DATA.write_text(json.dumps(tree, indent=2))
 
-def parse_path(raw: str) -> list[str]:
-    """Split 'Personal/Finance/Taxes/2022' or 'Personal > Finance > Taxes' into parts."""
-    raw = raw.strip()
-    if "/" in raw:
-        parts = [p.strip() for p in raw.split("/")]
-    elif " > " in raw:
-        parts = [p.strip() for p in raw.split(" > ")]
-    else:
-        parts = [raw]
-    return [p for p in parts if p]
+def load_config():
+    if CONFIG.exists():
+        return json.loads(CONFIG.read_text())
+    return {}
 
-def get_node(d: dict, parts: list[str], create: bool = False) -> dict | None:
-    """Navigate to node at path. If create=True, auto-create missing nodes."""
-    cur = d["nodes"]
+def save_config(cfg):
+    CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG.write_text(json.dumps(cfg, indent=2))
+
+# ── Path resolution ───────────────────────────────────────────────
+def parse_path(path_str):
+    path_str = path_str.replace(" > ", "/")
+    return [p.strip() for p in path_str.split("/") if p.strip()]
+
+def find_node(tree, parts, create=False):
+    node = tree
     for part in parts:
-        # fuzzy match: case-insensitive partial
-        match = _fuzzy(cur, part)
-        if match:
-            node = cur[match]
-        elif create:
-            cur[part] = {}
-            node = cur[part]
-            match = part
-        else:
-            return None
-        cur = node.setdefault("children", {})
-    # return the node itself (parent's child dict entry)
-    # we need the actual node, not its children dict
-    # re-traverse to get the node object
-    cur = d["nodes"]
-    node = None
-    for part in parts:
-        match = _fuzzy(cur, part) or part
-        node = cur[match]
-        cur = node.setdefault("children", {})
+        found = None
+        for child in node.get("children", []):
+            if child["name"].lower() == part.lower():
+                found = child
+                break
+        if not found:
+            for child in node.get("children", []):
+                if part.lower() in child["name"].lower():
+                    found = child
+                    break
+        if not found:
+            if create:
+                new_node = {"name": part, "children": [], "items": []}
+                node.setdefault("children", []).append(new_node)
+                found = new_node
+            else:
+                return None
+        node = found
     return node
 
-def _fuzzy(d: dict, key: str) -> str | None:
-    """Find best matching key in dict (exact first, then case-insensitive partial)."""
-    if key in d:
-        return key
-    key_l = key.lower()
-    candidates = [k for k in d if key_l in k.lower()]
-    if len(candidates) == 1:
-        return candidates[0]
-    # exact case-insensitive
-    exact = [k for k in d if k.lower() == key_l]
-    if exact:
-        return exact[0]
-    return candidates[0] if candidates else None
+# ── Tag extraction ────────────────────────────────────────────────
+def extract_tags(text):
+    return re.findall(r'\b[A-Z][A-Z0-9]{1,}(?:\b|$)', text)
 
-def next_id(items: list) -> int:
-    return max((i["id"] for i in items), default=0) + 1
+# ── Display helpers ───────────────────────────────────────────────
+def fmt_item(item, idx):
+    check = "✅" if item.get("done") else "⬜"
+    tags = item.get("tags", [])
+    tag_str = f" [{', '.join(tags)}]" if tags else ""
+    deadline = item.get("deadline", "")
+    dl_str = f" 📅 {deadline}" if deadline else ""
+    return f"  {check} #{idx} {item['text']}{tag_str}{dl_str}"
 
-def extract_tags(text: str) -> list[str]:
-    return re.findall(r'\b[A-Z][A-Z0-9]{1,9}\b', text)
+def print_tree(node, indent=0, items=True):
+    prefix = "  " * indent
+    if node["name"] != "root":
+        print(f"{prefix}📂 {node['name']}")
+    if items:
+        for i, item in enumerate(node.get("items", []), 1):
+            print(f"{prefix}{fmt_item(item, i)}")
+    for child in node.get("children", []):
+        print_tree(child, indent + 1, items)
 
-def has_content(node: dict) -> bool:
-    """True if this node or any descendant has items."""
-    if node.get("items"):
-        return True
-    for child in node.get("children", {}).values():
-        if has_content(child):
-            return True
-    return False
+def tree_to_text(node, indent=0, items=True):
+    """Return the tree as a string (for email body)."""
+    lines = []
+    prefix = "  " * indent
+    if node["name"] != "root":
+        lines.append(f"{prefix}📂 {node['name']}")
+    if items:
+        for i, item in enumerate(node.get("items", []), 1):
+            lines.append(f"{prefix}{fmt_item(item, i)}")
+    for child in node.get("children", []):
+        lines.append(tree_to_text(child, indent + 1, items))
+    return "\n".join(lines)
 
-# ── Print helpers ─────────────────────────────────────────────────
+# ── Collect all items recursively ─────────────────────────────────
+def collect_items(node, path=""):
+    """Yield (full_path, item_index, item) for every item in the tree."""
+    current_path = f"{path}/{node['name']}" if node["name"] != "root" else ""
+    for i, item in enumerate(node.get("items", []), 1):
+        yield (current_path.lstrip("/"), i, item)
+    for child in node.get("children", []):
+        yield from collect_items(child, current_path)
 
-def print_node(name: str, node: dict, depth: int = 0, show_items: bool = True):
-    pad = INDENT * depth
-    # show node header if it has content
-    if not has_content(node) and show_items:
-        return
-    print(f"{pad}📂 {name}")
-    if show_items:
-        for item in node.get("items", []):
-            tick = "✅" if item["done"] else "⬜"
-            print(f"{pad}{INDENT}{tick} #{item['id']} {item['text']}")
-    for child_name, child in node.get("children", {}).items():
-        print_node(child_name, child, depth + 1, show_items)
+# ── Email ─────────────────────────────────────────────────────────
+def send_email(subject, body, to_addrs):
+    """Send email via Gmail SMTP using App Password."""
+    cfg = load_config()
+    gmail_address = cfg.get("gmail_address", os.environ.get("GMAIL_ADDRESS", "selfrealizationpy@gmail.com"))
+    app_password = os.environ.get("GMAIL_APP_PASSWORD", "")
 
-def print_tree_only(name: str, node: dict, depth: int = 0):
-    pad = INDENT * depth
-    print(f"{pad}📂 {name}")
-    for child_name, child in node.get("children", {}).items():
-        print_tree_only(child_name, child, depth + 1)
+    if not app_password:
+        print("❌ GMAIL_APP_PASSWORD not set. Run: export GMAIL_APP_PASSWORD='xxxx xxxx xxxx xxxx'")
+        sys.exit(1)
 
-# ── Commands ──────────────────────────────────────────────────────
+    # Remove spaces from app password (Google format: "xxxx xxxx xxxx xxxx")
+    app_password = app_password.replace(" ", "")
 
-def cmd_add(path_str: str, text: str):
-    parts = parse_path(path_str)
-    d = load()
-    node = get_node(d, parts, create=True)
-    items = node.setdefault("items", [])
-    item = {
-        "id": next_id(items),
-        "text": text,
-        "done": False,
-        "created": datetime.now().strftime("%Y-%m-%d %H:%M")
-    }
-    items.append(item)
-    _save(d)
-    path_display = " › ".join(parts)
-    tags = extract_tags(text)
-    tag_str = f"  🏷 {' '.join(tags)}" if tags else ""
-    print(f"✅ Added to {path_display}:\n   #{item['id']} {text}{tag_str}")
+    if isinstance(to_addrs, str):
+        to_addrs = [a.strip() for a in to_addrs.split(",")]
 
-def cmd_list():
-    d = load()
-    if not d["nodes"]:
-        print("📭 No todos yet."); return
-    print("📋 Todo Tree\n")
-    for name, node in d["nodes"].items():
-        print_node(name, node, depth=0)
+    msg = MIMEMultipart()
+    msg["From"] = gmail_address
+    msg["To"] = ", ".join(to_addrs)
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
 
-def cmd_tree():
-    d = load()
-    if not d["nodes"]:
-        print("📭 No nodes yet."); return
-    for name, node in d["nodes"].items():
-        print_tree_only(name, node)
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(gmail_address, app_password)
+            server.sendmail(gmail_address, to_addrs, msg.as_string())
+        print(f"✅ Email sent to {', '.join(to_addrs)}")
+        print(f"   Subject: {subject}")
+    except Exception as e:
+        print(f"❌ Email failed: {e}")
+        sys.exit(1)
 
-def cmd_show(path_str: str):
-    parts = parse_path(path_str)
-    d = load()
-    node = get_node(d, parts)
-    if node is None:
-        print(f"❌ Path not found: {' › '.join(parts)}"); return
-    print_node(parts[-1], node, depth=0)
+# ── Filter logic ──────────────────────────────────────────────────
+def filter_items(tree, filter_type):
+    """
+    Filter items from the tree based on filter_type.
+    Returns list of (path, idx, item) tuples.
 
-def cmd_find(tag: str, path_str: str = ""):
-    tag_up = tag.upper()
-    d = load()
+    filter_type can be:
+      - "all"       — everything
+      - "past-due"  — items with deadline before today
+      - "A1000"     — items tagged A1000
+      - "Monday", "Tuesday", ... "Sunday" — items tagged with that day
+      - "Weekend"   — items tagged Saturday, Sunday, or Weekend
+      - any tag     — items matching that tag
+    """
+    today = date.today()
     results = []
 
-    def search(node: dict, current_path: list[str]):
-        for item in node.get("items", []):
-            item_tags = extract_tags(item["text"])
-            if tag_up and tag_up not in item_tags and tag_up.lower() not in item["text"].lower():
-                continue
-            results.append((list(current_path), item))
-        for child_name, child in node.get("children", {}).items():
-            search(child, current_path + [child_name])
+    for path, idx, item in collect_items(tree):
+        tags = [t.upper() for t in item.get("tags", [])]
+        text_upper = item.get("text", "").upper()
 
-    # start from path if given, else root
+        if filter_type == "all":
+            results.append((path, idx, item))
+
+        elif filter_type == "past-due":
+            deadline_str = item.get("deadline", "")
+            if deadline_str:
+                try:
+                    dl = datetime.strptime(deadline_str, "%Y-%m-%d").date()
+                    if dl < today:
+                        results.append((path, idx, item))
+                except ValueError:
+                    pass
+
+        elif filter_type.upper() == "WEEKEND":
+            weekend_tags = {"SATURDAY", "SUNDAY", "WEEKEND"}
+            if weekend_tags.intersection(set(tags)) or any(wt in text_upper for wt in weekend_tags):
+                results.append((path, idx, item))
+
+        else:
+            # Match tag or text content
+            search = filter_type.upper()
+            if search in tags or search in text_upper:
+                results.append((path, idx, item))
+
+    return results
+
+def format_filtered_items(items, filter_label):
+    """Format filtered items into a nice email body."""
+    if not items:
+        return f"No items matching '{filter_label}' found.\n"
+
+    lines = [f"📋 Todo Items — {filter_label}", f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ""]
+
+    # Group by path
+    by_path = {}
+    for path, idx, item in items:
+        by_path.setdefault(path or "Root", []).append((idx, item))
+
+    for path, path_items in sorted(by_path.items()):
+        lines.append(f"📂 {path.replace('/', ' › ')}")
+        for idx, item in path_items:
+            check = "✅" if item.get("done") else "⬜"
+            tags = item.get("tags", [])
+            tag_str = f" [{', '.join(tags)}]" if tags else ""
+            deadline = item.get("deadline", "")
+            dl_str = f" 📅 {deadline}" if deadline else ""
+            overdue = ""
+            if deadline and not item.get("done"):
+                try:
+                    dl = datetime.strptime(deadline, "%Y-%m-%d").date()
+                    if dl < date.today():
+                        overdue = " 🔴 OVERDUE"
+                except ValueError:
+                    pass
+            lines.append(f"  {check} #{idx} {item['text']}{tag_str}{dl_str}{overdue}")
+        lines.append("")
+
+    lines.append("— Yukteshwar (Todo Agent)")
+    return "\n".join(lines)
+
+# ── Commands ──────────────────────────────────────────────────────
+def cmd_add(path_str, text):
+    tree = load_data()
+    parts = parse_path(path_str)
+    node = find_node(tree, parts, create=True)
+    tags = extract_tags(text)
+    # Extract deadline from text: DEADLINE:YYYY-MM-DD
+    deadline = ""
+    dl_match = re.search(r'DEADLINE:(\d{4}-\d{2}-\d{2})', text)
+    if dl_match:
+        deadline = dl_match.group(1)
+        text = text.replace(dl_match.group(0), "").strip()
+    item = {"text": text, "done": False, "tags": tags}
+    if deadline:
+        item["deadline"] = deadline
+    node.setdefault("items", []).append(item)
+    save_data(tree)
+    path_display = " › ".join(parts)
+    print(f"✅ Added to {path_display}: \"{text}\"")
+    if tags:
+        print(f"   Tags: {', '.join(tags)}")
+    if deadline:
+        print(f"   Deadline: {deadline}")
+
+def cmd_list():
+    tree = load_data()
+    print("📋 Todo Tree\n")
+    print_tree(tree)
+
+def cmd_tree():
+    tree = load_data()
+    print("🌳 Tree Structure\n")
+    print_tree(tree, items=False)
+
+def cmd_show(path_str):
+    tree = load_data()
+    parts = parse_path(path_str)
+    node = find_node(tree, parts)
+    if not node:
+        print(f"❌ Path not found: {path_str}")
+        sys.exit(1)
+    print_tree(node)
+
+def cmd_find(tag, path_str=""):
+    tree = load_data()
+    root = tree
     if path_str:
         parts = parse_path(path_str)
-        start_node = get_node(d, parts)
-        if start_node is None:
-            print(f"❌ Path not found: {path_str}"); return
-        search(start_node, parts)
-    else:
-        for name, node in d["nodes"].items():
-            search(node, [name])
+        root = find_node(tree, parts)
+        if not root:
+            print(f"❌ Path not found: {path_str}")
+            sys.exit(1)
 
+    results = []
+    def search(node, trail=""):
+        current = f"{trail}/{node['name']}" if node['name'] != 'root' else trail
+        for i, item in enumerate(node.get("items", []), 1):
+            if tag.upper() in [t.upper() for t in item.get("tags", [])] or tag.upper() in item.get("text", "").upper():
+                results.append((current.lstrip("/"), i, item))
+        for child in node.get("children", []):
+            search(child, current)
+
+    search(root)
     if not results:
-        scope = f" in {path_str}" if path_str else ""
-        print(f"🔍 No results for '{tag}'{scope}"); return
+        print(f"🔍 No items matching '{tag}'")
+        return
+    print(f"🔍 Found {len(results)} item(s) matching '{tag}':\n")
+    for path, idx, item in results:
+        print(f"  📂 {path.replace('/', ' › ')}")
+        print(f"  {fmt_item(item, idx)}\n")
 
-    print(f"🔍 {len(results)} result(s) for '{tag}':\n")
-    for path_parts, item in results:
-        tick = "✅" if item["done"] else "⬜"
-        print(f"{tick}  {' › '.join(path_parts)}")
-        print(f"    #{item['id']} {item['text']}\n")
-
-def cmd_done(path_str: str, item_id: int, mark: bool = True):
+def cmd_done(path_str, item_id, mark=True):
+    tree = load_data()
     parts = parse_path(path_str)
-    d = load()
-    node = get_node(d, parts)
-    if node is None:
-        print(f"❌ Path not found: {' › '.join(parts)}"); return
-    for item in node.get("items", []):
-        if item["id"] == item_id:
-            item["done"] = mark
-            _save(d)
-            state = "✅ Done" if mark else "↩️ Undone"
-            print(f"{state}: {item['text']}"); return
-    print(f"❌ Item #{item_id} not found at {' › '.join(parts)}")
+    node = find_node(tree, parts)
+    if not node:
+        print(f"❌ Path not found: {path_str}")
+        sys.exit(1)
+    items = node.get("items", [])
+    if item_id < 1 or item_id > len(items):
+        print(f"❌ Item #{item_id} not found")
+        sys.exit(1)
+    items[item_id - 1]["done"] = mark
+    save_data(tree)
+    status = "done" if mark else "not done"
+    print(f"✅ Marked #{item_id} as {status}: \"{items[item_id-1]['text']}\"")
 
 def cmd_clear():
-    d = load()
-    n = [0]
-
-    def clear_node(node: dict):
+    tree = load_data()
+    count = 0
+    def clear_done(node):
+        nonlocal count
         before = len(node.get("items", []))
-        node["items"] = [i for i in node.get("items", []) if not i["done"]]
-        n[0] += before - len(node["items"])
-        for child in node.get("children", {}).values():
-            clear_node(child)
+        node["items"] = [i for i in node.get("items", []) if not i.get("done")]
+        count += before - len(node["items"])
+        for child in node.get("children", []):
+            clear_done(child)
+    clear_done(tree)
+    save_data(tree)
+    print(f"🧹 Cleared {count} completed item(s)")
 
-    for node in d["nodes"].values():
-        clear_node(node)
-    _save(d)
-    print(f"🗑️ Cleared {n[0]} completed item(s).")
-
-def cmd_delete(path_str: str):
+def cmd_delete(path_str):
+    tree = load_data()
     parts = parse_path(path_str)
-    d = load()
-    if len(parts) == 1:
-        key = _fuzzy(d["nodes"], parts[0])
-        if key:
-            del d["nodes"][key]
-            _save(d)
-            print(f"🗑️ Deleted: {parts[0]}")
-        else:
-            print(f"❌ Not found: {parts[0]}")
-        return
-    parent_node = get_node(d, parts[:-1])
-    if parent_node is None:
-        print(f"❌ Parent path not found"); return
-    children = parent_node.get("children", {})
-    key = _fuzzy(children, parts[-1])
-    if key:
-        del children[key]
-        _save(d)
-        print(f"🗑️ Deleted: {' › '.join(parts)}")
-    else:
+    if len(parts) < 1:
+        print("❌ Cannot delete root")
+        sys.exit(1)
+    parent = find_node(tree, parts[:-1]) if len(parts) > 1 else tree
+    if not parent:
+        print(f"❌ Parent path not found")
+        sys.exit(1)
+    target_name = parts[-1].lower()
+    children = parent.get("children", [])
+    found = None
+    for i, child in enumerate(children):
+        if child["name"].lower() == target_name or target_name in child["name"].lower():
+            found = i
+            break
+    if found is None:
         print(f"❌ Node not found: {parts[-1]}")
+        sys.exit(1)
+    removed = children.pop(found)
+    save_data(tree)
+    print(f"🗑️ Deleted: {removed['name']}")
 
-def cmd_rename(path_str: str, new_name: str):
+def cmd_rename(path_str, new_name):
+    tree = load_data()
     parts = parse_path(path_str)
-    d = load()
-    if len(parts) == 1:
-        container = d["nodes"]
-    else:
-        parent = get_node(d, parts[:-1])
-        if parent is None:
-            print(f"❌ Parent not found"); return
-        container = parent.setdefault("children", {})
-    old_key = _fuzzy(container, parts[-1])
-    if not old_key:
-        print(f"❌ Not found: {parts[-1]}"); return
-    container[new_name] = container.pop(old_key)
-    _save(d)
-    print(f"✏️ Renamed '{old_key}' → '{new_name}'")
+    node = find_node(tree, parts)
+    if not node:
+        print(f"❌ Path not found: {path_str}")
+        sys.exit(1)
+    old = node["name"]
+    node["name"] = new_name
+    save_data(tree)
+    print(f"✏️ Renamed: {old} → {new_name}")
 
-def cmd_move(src_str: str, dst_str: str):
+def cmd_move(src_str, dst_str):
+    tree = load_data()
     src_parts = parse_path(src_str)
+    if len(src_parts) < 1:
+        print("❌ Cannot move root")
+        sys.exit(1)
+    src_parent = find_node(tree, src_parts[:-1]) if len(src_parts) > 1 else tree
+    if not src_parent:
+        print(f"❌ Source parent not found")
+        sys.exit(1)
+    target_name = src_parts[-1].lower()
+    children = src_parent.get("children", [])
+    found = None
+    for i, child in enumerate(children):
+        if child["name"].lower() == target_name or target_name in child["name"].lower():
+            found = i
+            break
+    if found is None:
+        print(f"❌ Source not found: {src_parts[-1]}")
+        sys.exit(1)
+    node = children.pop(found)
     dst_parts = parse_path(dst_str)
-    d = load()
-
-    # get source node
-    if len(src_parts) == 1:
-        src_container = d["nodes"]
-    else:
-        src_parent = get_node(d, src_parts[:-1])
-        if src_parent is None:
-            print(f"❌ Source parent not found"); return
-        src_container = src_parent.setdefault("children", {})
-    src_key = _fuzzy(src_container, src_parts[-1])
-    if not src_key:
-        print(f"❌ Source not found: {src_parts[-1]}"); return
-    node_data = src_container.pop(src_key)
-
-    # place at destination (auto-create path)
-    dst_node = get_node(d, dst_parts, create=True)
-    dst_node.setdefault("children", {})[src_parts[-1]] = node_data
-    _save(d)
-    print(f"📦 Moved '{' › '.join(src_parts)}' → '{' › '.join(dst_parts)} › {src_parts[-1]}'")
+    dst_node = find_node(tree, dst_parts, create=True)
+    dst_node.setdefault("children", []).append(node)
+    save_data(tree)
+    print(f"📦 Moved: {node['name']} → {dst_str}")
 
 def cmd_dump():
-    print(json.dumps(load(), indent=2, ensure_ascii=False))
+    tree = load_data()
+    print(json.dumps(tree, indent=2))
 
-# ── Main ──────────────────────────────────────────────────────────
+def cmd_email(subject, body, to_addrs):
+    send_email(subject, body, to_addrs)
+
+def cmd_email_todos(to_addrs):
+    """Email the full todo tree."""
+    tree = load_data()
+    body = tree_to_text(tree)
+    full_body = f"📋 Full Todo List\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{body}\n\n— Yukteshwar (Todo Agent)"
+    subject = f"📋 Full Todo List — {datetime.now().strftime('%Y-%m-%d')}"
+    send_email(subject, full_body, to_addrs)
+
+def cmd_email_filtered(filter_type, to_addrs):
+    """Email filtered items."""
+    tree = load_data()
+    items = filter_items(tree, filter_type)
+
+    # Build a nice subject based on filter
+    filter_labels = {
+        "all": "All Items",
+        "past-due": "⚠️ Past Due Items",
+        "A1000": "A1000 Tagged Items",
+        "MONDAY": "Monday Items",
+        "TUESDAY": "Tuesday Items",
+        "WEDNESDAY": "Wednesday Items",
+        "THURSDAY": "Thursday Items",
+        "FRIDAY": "Friday Items",
+        "SATURDAY": "Saturday Items",
+        "SUNDAY": "Sunday Items",
+        "WEEKEND": "Weekend Items",
+    }
+    label = filter_labels.get(filter_type.upper(), f"'{filter_type}' Items")
+    subject = f"📋 Todo: {label} — {datetime.now().strftime('%Y-%m-%d')}"
+    body = format_filtered_items(items, label)
+    send_email(subject, body, to_addrs)
+
+def cmd_config_show():
+    cfg = load_config()
+    print("📧 Email config:")
+    for key in ["chuck_email", "gmail_address"]:
+        print(f"  {key}: {cfg.get(key, '(not set)')}")
+
+def cmd_config_set(key, value):
+    cfg = load_config()
+    cfg[key] = value
+    save_config(cfg)
+    print(f"✅ Set {key} = {value}")
 
 def usage():
     print(__doc__)
 
+# ── Main ──────────────────────────────────────────────────────────
 if __name__ == "__main__":
     args = sys.argv[1:]
     if not args:
-        usage(); sys.exit(1)
+        usage()
+        sys.exit(0)
 
     cmd = args[0]
     try:
-        if cmd == "add":        cmd_add(args[1], args[2])
-        elif cmd == "list":     cmd_list()
-        elif cmd == "tree":     cmd_tree()
-        elif cmd == "show":     cmd_show(args[1])
-        elif cmd == "find":     cmd_find(args[1], args[2] if len(args) > 2 else "")
-        elif cmd == "done":     cmd_done(args[1], int(args[2]))
-        elif cmd == "undone":   cmd_done(args[1], int(args[2]), mark=False)
-        elif cmd == "clear":    cmd_clear()
-        elif cmd == "delete":   cmd_delete(args[1])
-        elif cmd == "rename":   cmd_rename(args[1], args[2])
-        elif cmd == "move":     cmd_move(args[1], args[2])
-        elif cmd == "dump":     cmd_dump()
+        if cmd == "add":            cmd_add(args[1], args[2])
+        elif cmd == "list":         cmd_list()
+        elif cmd == "tree":         cmd_tree()
+        elif cmd == "show":         cmd_show(args[1])
+        elif cmd == "find":         cmd_find(args[1], args[2] if len(args) > 2 else "")
+        elif cmd == "done":         cmd_done(args[1], int(args[2]))
+        elif cmd == "undone":       cmd_done(args[1], int(args[2]), mark=False)
+        elif cmd == "clear":        cmd_clear()
+        elif cmd == "delete":       cmd_delete(args[1])
+        elif cmd == "rename":       cmd_rename(args[1], args[2])
+        elif cmd == "move":         cmd_move(args[1], args[2])
+        elif cmd == "dump":         cmd_dump()
+        elif cmd == "email":        cmd_email(args[1], args[2], args[3])
+        elif cmd == "email-todos":  cmd_email_todos(args[1])
+        elif cmd == "email-filtered": cmd_email_filtered(args[1], args[2])
+        elif cmd == "config-show":  cmd_config_show()
+        elif cmd == "config-set":   cmd_config_set(args[1], args[2])
         else:
             print(f"Unknown command: {cmd}"); usage(); sys.exit(1)
     except IndexError as e:
