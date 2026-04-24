@@ -23,8 +23,8 @@ fi
 
 # 1. Install dependencies
 echo "  [1/4] Installing dependencies..."
-pip install fastapi uvicorn --break-system-packages -q 2>/dev/null || \
-pip install fastapi uvicorn -q
+python3 -m pip install fastapi uvicorn --break-system-packages -q 2>/dev/null || \
+python3 -m pip install fastapi uvicorn -q
 
 # 2. Install systemd service
 echo "  [2/4] Installing systemd service..."
