@@ -488,11 +488,13 @@ body::after {
 .node-header:hover { background: var(--bg-hover); }
 .node-header:hover .node-actions { opacity: 1; pointer-events: auto; }
 .node-chevron {
-  width: 22px; height: 22px;
+  width: 24px; height: 24px;
   display: flex; align-items: center; justify-content: center;
-  color: var(--text-tertiary); transition: transform var(--transition);
-  flex-shrink: 0; font-size: 10px;
+  color: var(--text-secondary); transition: transform var(--transition), background var(--transition), color var(--transition);
+  flex-shrink: 0; font-size: 16px; font-weight: 700;
+  border-radius: 6px;
 }
+.node-chevron:hover { background: var(--accent-soft); color: var(--accent); }
 .node-chevron.open { transform: rotate(90deg); }
 .node-icon { font-size: 16px; flex-shrink: 0; margin-right: 4px; }
 .node-label {
@@ -560,6 +562,30 @@ body::after {
 .tag-HABIT, .tag-WEEKLY, .tag-DAILY { background: var(--teal-soft); color: var(--teal); }
 .tag-GOAL, .tag-MILESTONE { background: var(--purple-soft); color: var(--purple); }
 .tag-default { background: var(--amber-soft); color: var(--amber); }
+/* Search highlight */
+mark.hl {
+  background: var(--accent-medium);
+  color: var(--accent);
+  padding: 1px 3px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+.search-hit { scroll-margin-top: 120px; }
+.search-hit.active {
+  background: var(--accent-soft);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+.search-nav {
+  display: flex; align-items: center; gap: 4px;
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--text-secondary);
+}
+.search-nav .count {
+  min-width: 60px; text-align: center;
+  padding: 0 6px;
+}
 .item-actions {
   display: flex; gap: 1px; opacity: 0; pointer-events: none;
   transition: opacity var(--transition);
@@ -673,6 +699,7 @@ const API_KEY = new URLSearchParams(location.search).get('key') || '';
 let todoData = { nodes: {} };
 let expandedNodes = new Set();
 let searchQuery = '';
+let searchIndex = 0;
 let modal = null;
 let toasts = [];
 let toastId = 0;
@@ -739,6 +766,53 @@ function nodeMatchesSearch(node, name) {
   if ((node.items || []).some(i => matchesSearch(i.text))) return true;
   return Object.entries(node.children || {}).some(([n, c]) => nodeMatchesSearch(c, n));
 }
+function highlightMatch(text) {
+  if (!searchQuery) return esc(text);
+  const escaped = esc(text);
+  const q = esc(searchQuery);
+  const regex = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  return escaped.replace(regex, '<mark class="hl">$1</mark>');
+}
+function autoExpandForSearch() {
+  if (!searchQuery) return;
+  (function walk(nodes, path) {
+    Object.entries(nodes).forEach(([name, node]) => {
+      const p = [...path, name];
+      if (nodeMatchesSearch(node, name)) {
+        // expand every ancestor + this node
+        for (let i = 1; i <= p.length; i++) {
+          expandedNodes.add(pathKey(p.slice(0, i)));
+        }
+      }
+      if (node.children) walk(node.children, p);
+    });
+  })(todoData.nodes || {}, []);
+}
+
+function getSearchHitCount() {
+  return document.querySelectorAll('.search-hit').length;
+}
+function scrollToHit(idx) {
+  const hits = document.querySelectorAll('.search-hit');
+  if (!hits.length) return;
+  hits.forEach(h => h.classList.remove('active'));
+  searchIndex = ((idx % hits.length) + hits.length) % hits.length;
+  const el = hits[searchIndex];
+  el.classList.add('active');
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Update counter without full re-render
+  const counter = document.getElementById('search-counter');
+  if (counter) counter.textContent = `${searchIndex + 1} / ${hits.length}`;
+}
+function findNext() { scrollToHit(searchIndex + 1); }
+function findPrev() { scrollToHit(searchIndex - 1); }
+function onSearchInput(val) {
+  searchQuery = val;
+  searchIndex = 0;
+  render();
+  // After render, scroll to first hit
+  setTimeout(() => { if (searchQuery) scrollToHit(0); }, 50);
+}
 function pathKey(p) { return p.join('\x00'); }
 
 function toggleNode(path) {
@@ -756,6 +830,39 @@ function expandAll() {
   render();
 }
 function collapseAll() { expandedNodes.clear(); render(); }
+
+function expandBranch(path) {
+  // Expand this node and all its descendants
+  function walkFrom(nodes, curPath) {
+    Object.entries(nodes).forEach(([name, node]) => {
+      const p = [...curPath, name];
+      expandedNodes.add(pathKey(p));
+      if (node.children) walkFrom(node.children, p);
+    });
+  }
+  expandedNodes.add(pathKey(path));
+  // Navigate to the node and expand its children
+  let node = todoData.nodes;
+  for (let i = 0; i < path.length; i++) {
+    node = node[path[i]];
+    if (i < path.length - 1 && node.children) node = node.children;
+  }
+  if (node && node.children) walkFrom(node.children, path);
+  render();
+}
+
+function collapseBranch(path) {
+  // Collapse this node and all its descendants
+  function removeBelow(prefix) {
+    const toRemove = [];
+    expandedNodes.forEach(k => {
+      if (k === prefix || k.startsWith(prefix + '\x00')) toRemove.push(k);
+    });
+    toRemove.forEach(k => expandedNodes.delete(k));
+  }
+  removeBelow(pathKey(path));
+  render();
+}
 
 async function addItem(path, text) {
   if (!text.trim()) return;
@@ -796,6 +903,19 @@ function showModal(type, props = {}) {
 }
 function closeModal() { modal = null; render(); }
 
+function downloadBackup() {
+  const json = JSON.stringify(todoData, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().slice(0,10);
+  a.href = url;
+  a.download = 'todos-backup-' + ts + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Backup downloaded');
+}
+
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 function renderTags(text) {
@@ -809,10 +929,11 @@ function renderTags(text) {
 
 function renderItem(item, path) {
   const jp = JSON.stringify(path), ji = JSON.stringify(item);
-  return `<div class="item ${item.done?'done':''}">
+  const isHit = searchQuery && matchesSearch(item.text);
+  return `<div class="item ${item.done?'done':''} ${isHit?'search-hit':''}">
     <div class="checkbox ${item.done?'checked':''}" onclick="toggleDone(${jp},${ji})"></div>
     <span class="item-id">#${item.id}</span>
-    <span class="item-text">${esc(item.text)}</span>
+    <span class="item-text">${highlightMatch(item.text)}</span>
     ${renderTags(item.text)}
     <div class="item-actions">
       <button class="btn-icon" onclick="showModal('editItem',{path:${jp},item:${ji}})" title="Edit">✎</button>
@@ -832,13 +953,15 @@ function renderNode(name, node, parentPath) {
   const jp = JSON.stringify(path);
   const children = Object.entries(node.children || {}).sort(([a],[b]) => a.localeCompare(b)).map(([n,c]) => renderNode(n,c,path)).join('');
   const items = (node.items || []).filter(i => !searchQuery || matchesSearch(i.text)).map(i => renderItem(i, path)).join('');
+  const nameIsHit = searchQuery && matchesSearch(name);
   return `<div class="tree-node">
-    <div class="node-header" onclick="toggleNode(${jp})">
+    <div class="node-header ${nameIsHit?'search-hit':''}" onclick="toggleNode(${jp})">
       <div class="node-chevron ${isOpen?'open':''}">▸</div>
       <span class="node-icon">${(hasKids||hasItems)?(isOpen?'📂':'📁'):'📄'}</span>
-      <span class="node-label">${esc(name)}</span>
+      <span class="node-label">${highlightMatch(name)}</span>
       ${total>0?`<span class="node-badge">${done}/${total}</span>`:''}
       <div class="node-actions" onclick="event.stopPropagation()">
+        ${hasKids?`<button class="btn-icon" onclick="${isOpen?'collapseBranch':'expandBranch'}(${jp})" title="${isOpen?'Collapse branch':'Expand branch'}">${isOpen?'⊟':'⊞'}</button>`:''}
         <button class="btn-icon" onclick="showModal('addItem',{path:${jp}})" title="Add item">+</button>
         <button class="btn-icon" onclick="showModal('addFolder',{path:${jp}})" title="Subfolder">📁</button>
         <button class="btn-icon" onclick="showModal('renameNode',{path:${jp},name:'${esc(name).replace(/'/g,"\\'")}'})" title="Rename">✎</button>
@@ -927,6 +1050,7 @@ function renderModal() {
 }
 
 function render() {
+  autoExpandForSearch();
   const s = getTotalStats();
   const tree = Object.entries(todoData.nodes || {}).sort(([a],[b]) => a.localeCompare(b)).map(([n,nd]) => renderNode(n, nd, [])).join('');
   document.getElementById('app').innerHTML = `
@@ -942,6 +1066,7 @@ function render() {
       </div>
       <div class="header-right">
         <div class="theme-toggle" onclick="toggleTheme()" title="Toggle theme"></div>
+        <button class="btn" onclick="downloadBackup()" title="Download backup">⬇ Backup</button>
         <button class="btn" onclick="expandAll()">⊞ Expand</button>
         <button class="btn" onclick="collapseAll()">⊟ Collapse</button>
         <button class="btn btn-primary" onclick="showModal('addRootFolder')">+ Folder</button>
@@ -950,8 +1075,13 @@ function render() {
     <div class="toolbar">
       <div class="search-wrap">
         <span class="si">🔍</span>
-        <input placeholder="Search items and folders..." value="${esc(searchQuery)}" oninput="searchQuery=this.value;render()">
+        <input placeholder="Search items and folders..." value="${esc(searchQuery)}" oninput="onSearchInput(this.value)" onkeydown="if(event.key==='Enter'){event.shiftKey?findPrev():findNext();}">
       </div>
+      ${searchQuery ? `<div class="search-nav">
+        <button class="btn btn-ghost" onclick="findPrev()" title="Previous (Shift+Enter)">▲</button>
+        <span class="count" id="search-counter">–</span>
+        <button class="btn btn-ghost" onclick="findNext()" title="Next (Enter)">▼</button>
+      </div>` : ''}
       <button class="btn btn-ghost" onclick="loadTodos()">↻ Refresh</button>
     </div>
     <div class="tree-container">
@@ -965,6 +1095,15 @@ function render() {
     ${renderModal()}
     <div class="toast-wrap">${toasts.map(t => `<div class="toast ${t.type}">${t.type==='success'?'✓':'✗'} ${esc(t.msg)}</div>`).join('')}</div>
   `;
+  // Keep focus on search input
+  if (searchQuery) {
+    const inp = document.querySelector('.search-wrap input');
+    if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+    // Update hit counter
+    const hits = document.querySelectorAll('.search-hit');
+    const counter = document.getElementById('search-counter');
+    if (counter) counter.textContent = hits.length ? `${Math.min(searchIndex+1, hits.length)} / ${hits.length}` : '0';
+  }
 }
 
 loadTodos();
