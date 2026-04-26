@@ -841,11 +841,15 @@ function expandBranch(path) {
     });
   }
   expandedNodes.add(pathKey(path));
-  // Navigate to the node and expand its children
-  let node = todoData.nodes;
+  // Navigate to the target node
+  let current = todoData.nodes;
+  let node = null;
   for (let i = 0; i < path.length; i++) {
-    node = node[path[i]];
-    if (i < path.length - 1 && node.children) node = node.children;
+    node = current[path[i]];
+    if (!node) break;
+    if (i < path.length - 1) {
+      current = node.children || {};
+    }
   }
   if (node && node.children) walkFrom(node.children, path);
   render();
@@ -961,7 +965,7 @@ function renderNode(name, node, parentPath) {
       <span class="node-label">${highlightMatch(name)}</span>
       ${total>0?`<span class="node-badge">${done}/${total}</span>`:''}
       <div class="node-actions" onclick="event.stopPropagation()">
-        ${hasKids?`<button class="btn-icon" onclick="${isOpen?'collapseBranch':'expandBranch'}(${jp})" title="${isOpen?'Collapse branch':'Expand branch'}">${isOpen?'⊟':'⊞'}</button>`:''}
+        ${(hasKids||hasItems)?`<button class="btn-icon" onclick="${isOpen?'collapseBranch':'expandBranch'}(${jp})" title="${isOpen?'Collapse branch':'Expand branch'}">${isOpen?'⊟':'⊞'}</button>`:''}
         <button class="btn-icon" onclick="showModal('addItem',{path:${jp}})" title="Add item">+</button>
         <button class="btn-icon" onclick="showModal('addFolder',{path:${jp}})" title="Subfolder">📁</button>
         <button class="btn-icon" onclick="showModal('renameNode',{path:${jp},name:'${esc(name).replace(/'/g,"\\'")}'})" title="Rename">✎</button>
