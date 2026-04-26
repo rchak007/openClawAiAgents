@@ -832,26 +832,21 @@ function expandAll() {
 function collapseAll() { expandedNodes.clear(); render(); }
 
 function expandBranch(path) {
-  // Expand this node and all its descendants
-  function walkFrom(nodes, curPath) {
+  expandedNodes.add(pathKey(path));
+  // Walk the full tree but only expand nodes under this path
+  function findAndExpand(nodes, curPath, targetPath) {
     Object.entries(nodes).forEach(([name, node]) => {
       const p = [...curPath, name];
-      expandedNodes.add(pathKey(p));
-      if (node.children) walkFrom(node.children, p);
+      const pk = pathKey(p);
+      const tp = pathKey(targetPath);
+      // If this path starts with our target path, expand it
+      if (pk === tp || pk.startsWith(tp + '\x00')) {
+        expandedNodes.add(pk);
+      }
+      if (node.children) findAndExpand(node.children, p, targetPath);
     });
   }
-  expandedNodes.add(pathKey(path));
-  // Navigate to the target node
-  let current = todoData.nodes;
-  let node = null;
-  for (let i = 0; i < path.length; i++) {
-    node = current[path[i]];
-    if (!node) break;
-    if (i < path.length - 1) {
-      current = node.children || {};
-    }
-  }
-  if (node && node.children) walkFrom(node.children, path);
+  findAndExpand(todoData.nodes || {}, [], path);
   render();
 }
 
@@ -960,12 +955,12 @@ function renderNode(name, node, parentPath) {
   const nameIsHit = searchQuery && matchesSearch(name);
   return `<div class="tree-node">
     <div class="node-header ${nameIsHit?'search-hit':''}" onclick="toggleNode(${jp})">
-      <div class="node-chevron ${isOpen?'open':''}">▸</div>
+      <div class="node-chevron ${isOpen?'open':''}" onclick="event.stopPropagation();toggleNode(${jp})">▸</div>
       <span class="node-icon">${(hasKids||hasItems)?(isOpen?'📂':'📁'):'📄'}</span>
       <span class="node-label">${highlightMatch(name)}</span>
       ${total>0?`<span class="node-badge">${done}/${total}</span>`:''}
       <div class="node-actions" onclick="event.stopPropagation()">
-        ${(hasKids||hasItems)?`<button class="btn-icon" onclick="${isOpen?'collapseBranch':'expandBranch'}(${jp})" title="${isOpen?'Collapse branch':'Expand branch'}">${isOpen?'⊟':'⊞'}</button>`:''}
+        ${(hasKids||hasItems)?`<button class="btn-icon" onclick="event.stopPropagation();${isOpen?'collapseBranch':'expandBranch'}(${jp})" title="${isOpen?'Collapse branch':'Expand branch'}">${isOpen?'⊟':'⊞'}</button>`:''}
         <button class="btn-icon" onclick="showModal('addItem',{path:${jp}})" title="Add item">+</button>
         <button class="btn-icon" onclick="showModal('addFolder',{path:${jp}})" title="Subfolder">📁</button>
         <button class="btn-icon" onclick="showModal('renameNode',{path:${jp},name:'${esc(name).replace(/'/g,"\\'")}'})" title="Rename">✎</button>
