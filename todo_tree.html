@@ -389,6 +389,15 @@ function renderTags(text) {
   }).join('') + '</div>';
 }
 
+/* ─── Item registry for event delegation (avoids JSON in HTML attributes) ─── */
+var itemRegistry = {};
+var itemRegCounter = 0;
+function regItem(item, path) {
+  var key = 'r' + (++itemRegCounter);
+  itemRegistry[key] = { item: item, path: path };
+  return key;
+}
+
 /* ─── EVENT DELEGATION ─── */
 document.addEventListener('click', function(e) {
   var btn = e.target.closest('[data-action]');
@@ -398,14 +407,15 @@ document.addEventListener('click', function(e) {
   var path = btn.getAttribute('data-path') ? JSON.parse(btn.getAttribute('data-path')) : null;
   var id = btn.getAttribute('data-id') ? parseInt(btn.getAttribute('data-id')) : null;
   var name = btn.getAttribute('data-name') || '';
+  var reg = btn.getAttribute('data-reg');
 
   switch (action) {
     case 'toggle': toggleNode(path); break;
     case 'expand-branch': expandBranch(path); break;
     case 'collapse-branch': collapseBranch(path); break;
     case 'toggle-done':
-      var item = JSON.parse(btn.getAttribute('data-item'));
-      doAction('toggleDone', path, item.id, !item.done);
+      var td = itemRegistry[reg];
+      if (td) doAction('toggleDone', td.path, td.item.id, !td.item.done);
       break;
     case 'add-item': showModal('addItem', { path: path }); break;
     case 'add-folder': showModal('addFolder', { path: path }); break;
@@ -414,32 +424,33 @@ document.addEventListener('click', function(e) {
       showModal('confirm', { msg: 'Delete "' + name + '" and all contents?', onConfirm: function() { doAction('deleteNode', path); } });
       break;
     case 'edit-item':
-      var editItem = JSON.parse(btn.getAttribute('data-item'));
-      showModal('editItem', { path: path, item: editItem });
+      var ei = itemRegistry[reg];
+      if (ei) showModal('editItem', { path: ei.path, item: ei.item });
       break;
     case 'move-item':
-      var moveItemData = JSON.parse(btn.getAttribute('data-item'));
-      showModal('moveItem', { path: path, item: moveItemData });
+      var mi = itemRegistry[reg];
+      if (mi) showModal('moveItem', { path: mi.path, item: mi.item });
       break;
     case 'delete-item':
-      showModal('confirm', { msg: 'Delete item #' + id + '?', onConfirm: function() { doAction('deleteItem', path, id); } });
+      var di = itemRegistry[reg];
+      if (di) showModal('confirm', { msg: 'Delete item #' + di.item.id + '?', onConfirm: function() { doAction('deleteItem', di.path, di.item.id); } });
       break;
   }
 });
 
 function renderItem(item, path) {
   var jp = JSON.stringify(path);
-  var ji = JSON.stringify(item);
+  var rk = regItem(item, path);
   var isHit = searchQuery && matchesSearch(item.text);
   var h = '<div class="item' + (item.done ? ' done' : '') + (isHit ? ' search-hit' : '') + '">';
-  h += '<div class="checkbox' + (item.done ? ' checked' : '') + '" data-action="toggle-done" data-path="' + esc(jp) + '" data-item="' + esc(ji) + '"></div>';
+  h += '<div class="checkbox' + (item.done ? ' checked' : '') + '" data-action="toggle-done" data-reg="' + rk + '"></div>';
   h += '<span class="item-id">#' + item.id + '</span>';
   h += '<span class="item-text">' + highlightMatch(item.text) + '</span>';
   h += renderTags(item.text);
   h += '<div class="item-actions">';
-  h += '<button class="btn-icon" data-action="edit-item" data-path="' + esc(jp) + '" data-item="' + esc(ji) + '" title="Edit">✎</button>';
-  h += '<button class="btn-icon" data-action="move-item" data-path="' + esc(jp) + '" data-item="' + esc(ji) + '" title="Move">↗</button>';
-  h += '<button class="btn-icon danger" data-action="delete-item" data-path="' + esc(jp) + '" data-id="' + item.id + '" title="Delete">×</button>';
+  h += '<button class="btn-icon" data-action="edit-item" data-reg="' + rk + '" title="Edit">✎</button>';
+  h += '<button class="btn-icon" data-action="move-item" data-reg="' + rk + '" title="Move">↗</button>';
+  h += '<button class="btn-icon danger" data-action="delete-item" data-reg="' + rk + '" title="Delete">×</button>';
   h += '</div></div>';
   return h;
 }
@@ -552,6 +563,8 @@ function bindModal() {
 }
 
 function render() {
+  itemRegistry = {};
+  itemRegCounter = 0;
   autoExpandForSearch();
   var s = getTotalStats();
   var nodeKeys = Object.keys(todoData.nodes || {}).sort();
