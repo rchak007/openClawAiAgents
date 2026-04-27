@@ -798,6 +798,20 @@ function showModal(type, props) {
 }
 function closeModal() { modal = null; render(); }
 
+function confirmDelete(type, path, itemId) {
+  if (type === 'item') {
+    showModal('confirm', {msg: 'Delete item #' + itemId + '?', action: 'deleteItem', args: [path, itemId]});
+  } else {
+    var name = path[path.length - 1];
+    showModal('confirm', {msg: 'Delete "' + name + '" and all contents?', action: 'deleteNode', args: [path]});
+  }
+}
+
+function renamePrompt(path) {
+  var name = path[path.length - 1];
+  showModal('renameNode', {path: path, name: name});
+}
+
 function downloadBackup() {
   var json = JSON.stringify(todoData, null, 2);
   var blob = new Blob([json], { type: 'application/json' });
@@ -832,7 +846,7 @@ function renderItem(item, path) {
     '<div class="item-actions">' +
       '<button class="btn-icon" onclick="event.stopPropagation();showModal(\'editItem\',{path:' + jp + ',item:' + ji + '})" title="Edit">✎</button>' +
       '<button class="btn-icon" onclick="event.stopPropagation();showModal(\'moveItem\',{path:' + jp + ',item:' + ji + '})" title="Move">↗</button>' +
-      '<button class="btn-icon danger" onclick="event.stopPropagation();showModal(\'confirm\',{msg:\'Delete item #' + item.id + '?\',action:\'deleteItem\',args:[' + jp + ',' + item.id + ']})" title="Delete">×</button>' +
+      '<button class="btn-icon danger" onclick="event.stopPropagation();confirmDelete(\'item\',' + jp + ',' + item.id + ')" title="Delete">×</button>' +
     '</div>' +
   '</div>';
 }
@@ -876,8 +890,8 @@ function renderNode(name, node, parentPath) {
         expandBtn +
         '<button class="btn-icon" onclick="event.stopPropagation();showModal(\'addItem\',{path:' + jp + '})" title="Add item">+</button>' +
         '<button class="btn-icon" onclick="event.stopPropagation();showModal(\'addFolder\',{path:' + jp + '})" title="Subfolder">📁</button>' +
-        '<button class="btn-icon" onclick="event.stopPropagation();showModal(\'renameNode\',{path:' + jp + ',name:\'' + esc(name).replace(/'/g, "\\'") + '\'})" title="Rename">✎</button>' +
-        '<button class="btn-icon danger" onclick="event.stopPropagation();showModal(\'confirm\',{msg:\'Delete \\x27' + esc(name).replace(/'/g, "\\'") + '\\x27 and all contents?\',action:\'deleteNode\',args:[' + jp + ']})" title="Delete">×</button>' +
+        '<button class="btn-icon" onclick="event.stopPropagation();renamePrompt(' + jp + ')" title="Rename">✎</button>' +
+        '<button class="btn-icon danger" onclick="event.stopPropagation();confirmDelete(\'node\',' + jp + ')" title="Delete">×</button>' +
       '</div>' +
     '</div>' +
     (isOpen ? '<div class="node-children"><div class="item-list">' + items + '</div>' + children + '</div>' : '') +
