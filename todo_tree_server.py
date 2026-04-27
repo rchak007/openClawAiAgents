@@ -237,7 +237,8 @@ async def rename_node(req: RenameNodeRequest, key: str = Depends(verify_key)):
 
 # ─── Frontend ─────────────────────────────────────────────────────────────────
 
-FRONTEND_HTML = r"""<!DOCTYPE html>
+FRONTEND_HTML = r"""
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1021,7 +1022,8 @@ function render() {
 loadTodos();
 </script>
 </body>
-</html>""";
+</html>
+""";
 
 LOGIN_HTML = """<!DOCTYPE html>
 <html lang="en">
