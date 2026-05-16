@@ -604,7 +604,7 @@ async function fetchData() {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function esc(s) { const d = document.createElement('div'); d.textContent = String(s ?? ''); return d.innerHTML; }
-function pathKey(p) { return p.join('\x00'); }
+function pathKey(p) { return p.join('//'); }
 
 function buildTagIndex() {
   const idx = {};
@@ -811,10 +811,10 @@ function renderNode(name, node, parentPath, visibility) {
     .map(it => renderItem(it, path, dim))
     .join('');
 
-  const onclickAttr = hasContent ? `onclick="event.stopPropagation();toggleNode('${esc(key).replace(/'/g,"\\'")}')"` : '';
+  const clickable = hasContent ? 'data-toggle="1"' : '';
 
   return `<div class="tree-node ${isOpen?'open':''} ${dim?'dim':''}" data-key="${esc(key)}">
-    <div class="tree-node-row" ${onclickAttr}>
+    <div class="tree-node-row" ${clickable} data-key="${esc(key)}">
       <span class="tree-toggle ${hasContent?'':'empty'}">▸</span>
       <span class="tree-folder-icon">📁</span>
       <span class="tree-node-label">${highlight(name)}</span>
@@ -963,6 +963,18 @@ function render() {
       inp.focus();
       inp.setSelectionRange(inp.value.length, inp.value.length);
     }
+  }
+
+  // Wire delegated click on the tree (folder rows). One listener, works for any depth.
+  const treeEl = document.querySelector('.tree');
+  if (treeEl && !treeEl._wired) {
+    treeEl.addEventListener('click', (ev) => {
+      const row = ev.target.closest('.tree-node-row[data-toggle="1"]');
+      if (!row) return;
+      const key = row.getAttribute('data-key');
+      if (key !== null) toggleNode(key);
+    });
+    treeEl._wired = true;
   }
 }
 
