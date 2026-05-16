@@ -811,7 +811,7 @@ function renderNode(name, node, parentPath, visibility) {
     .map(it => renderItem(it, path, dim))
     .join('');
 
-  const onclickAttr = hasContent ? `onclick="toggleNode('${esc(key).replace(/'/g,"\\'")}')"` : '';
+  const onclickAttr = hasContent ? `onclick="event.stopPropagation();toggleNode('${esc(key).replace(/'/g,"\\'")}')"` : '';
 
   return `<div class="tree-node ${isOpen?'open':''} ${dim?'dim':''}" data-key="${esc(key)}">
     <div class="tree-node-row" ${onclickAttr}>
