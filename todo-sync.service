@@ -1,0 +1,24 @@
+[Unit]
+Description=Todo Git Sync — push agent JSONs to private data repo on change
+After=network-online.target
+
+[Service]
+Type=simple
+# Adjust the python path if you use a venv (e.g. ~/github/.venv/bin/python)
+ExecStart=/usr/bin/python3 %h/github/openClawAiAgents/todo_git_sync.py
+Restart=on-failure
+RestartSec=10
+
+# --- Source files (override if your layout differs) ---
+Environment=TODO_FILE=%h/.openclaw/workspace/todos.json
+Environment=REALESTATE_FILE=%h/.openclaw/workspace-realestate/properties.json
+Environment=ETERNALQUEST_FILE=%h/.openclaw/workspace-eternalquest/eternalquest-todos.json
+
+# --- Data repo + tuning ---
+Environment=TODO_DATA_REPO=%h/github/todo-data
+Environment=TODO_DATA_BRANCH=main
+Environment=TODO_SYNC_POLL=5
+Environment=TODO_SYNC_DEBOUNCE=8
+
+[Install]
+WantedBy=default.target
