@@ -3,10 +3,10 @@
 todo_git_sync.py — Watch multiple agent JSON files and push changes to the
 private data repo, each under its own filename.
 
-Covers all three OpenClaw agents:
+Covers all three OpenClaw agents (repo keeps the original filenames):
     main         -> ~/.openclaw/workspace/todos.json                       -> todos.json
-    realestate   -> ~/.openclaw/workspace-realestate/properties.json       -> realestate.json
-    eternalquest -> ~/.openclaw/workspace-eternalquest/eternalquest-todos.json -> eternalquest.json
+    realestate   -> ~/.openclaw/workspace-realestate/properties.json       -> properties.json
+    eternalquest -> ~/.openclaw/workspace-eternalquest/eternalquest-todos.json -> eternalquest-todos.json
 
 Why a watcher (not a save_todos() hook):
   Each JSON is written by TWO independent processes — the web/server side AND
@@ -52,7 +52,7 @@ SOURCES = [
             "REALESTATE_FILE",
             f"{HOME}/.openclaw/workspace-realestate/properties.json",
         ),
-        "repo_name": "realestate.json",
+        "repo_name": "properties.json",
     },
     {
         "label": "eternalquest",
@@ -60,7 +60,7 @@ SOURCES = [
             "ETERNALQUEST_FILE",
             f"{HOME}/.openclaw/workspace-eternalquest/eternalquest-todos.json",
         ),
-        "repo_name": "eternalquest.json",
+        "repo_name": "eternalquest-todos.json",
     },
 ]
 

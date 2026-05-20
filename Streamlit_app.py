@@ -40,8 +40,8 @@ GH_BRANCH = st.secrets.get("github_branch", "main")
 # label shown in selector -> filename in the repo
 AGENTS = {
     "🗂️ Main": "todos.json",
-    "🏠 Real Estate": "realestate.json",
-    "🕉️ Self-Realization": "eternalquest.json",
+    "🏠 Real Estate": "properties.json",
+    "🕉️ Self-Realization": "eternalquest-todos.json",
 }
 
 
